@@ -92,10 +92,10 @@ def fetch_fda_recalls(limit: int = 100) -> List[Dict]:
         
     except requests.RequestException as e:
         print(f"Error fetching FDA data: {e}")
-        return get_fda_fallback_data()
+        return []
     except Exception as e:
         print(f"Unexpected error fetching FDA data: {e}")
-        return get_fda_fallback_data()
+        return []
 
 def fetch_cpsc_recalls(limit: int = 50) -> List[Dict]:
     """Fetch CPSC consumer product recalls"""
@@ -134,13 +134,13 @@ def fetch_cpsc_recalls(limit: int = 50) -> List[Dict]:
                 return normalized_recalls[:limit]
         
         # If API fails, return fallback data
-        fallback_data = get_cpsc_fallback_data()
+        fallback_data = []
         set_cache_data('cpsc_recalls', fallback_data)
         return fallback_data
         
     except Exception as e:
         print(f"Error fetching CPSC data: {e}")
-        fallback_data = get_cpsc_fallback_data()
+        fallback_data = []
         set_cache_data('cpsc_recalls', fallback_data)
         return fallback_data
 
@@ -187,68 +187,7 @@ def normalize_cpsc_recalls(raw_recalls: List[Dict]) -> List[Dict]:
     
     return normalized
 
-def get_fda_fallback_data() -> List[Dict]:
-    """Fallback FDA data when API is unavailable"""
-    return [
-        {
-            'id': 'FDA-2025-001',
-            'recall_number': 'F-001-2025',
-            'product_description': 'Various brands of frozen vegetables due to potential Listeria contamination',
-            'reason_for_recall': 'Products may be contaminated with Listeria monocytogenes',
-            'company': 'FrozenFresh Foods Inc.',
-            'date': '20250520',
-            'classification': 'Class I',
-            'status': 'Ongoing',
-            'distribution_pattern': 'Nationwide',
-            'product_quantity': '50,000 packages',
-            'source': 'FDA'
-        },
-        {
-            'id': 'FDA-2025-002',
-            'recall_number': 'F-002-2025',
-            'product_description': 'Organic baby food pouches due to elevated lead levels',
-            'reason_for_recall': 'Product contains elevated levels of lead',
-            'company': 'Healthy Start Baby Foods',
-            'date': '20250518',
-            'classification': 'Class II',
-            'status': 'Ongoing',
-            'distribution_pattern': 'Eastern US',
-            'product_quantity': '25,000 pouches',
-            'source': 'FDA'
-        }
-    ]
-
-def get_cpsc_fallback_data() -> List[Dict]:
-    """Fallback CPSC data when API is unavailable"""
-    return [
-        {
-            'id': 'CPSC-2025-001',
-            'recall_number': 'CPSC-2025-001',
-            'product_description': 'Electric Food Processors',
-            'reason_for_recall': 'Blade can detach during use, posing laceration hazard',
-            'company': 'KitchenTech Industries',
-            'date': '20250520',
-            'classification': 'Consumer Product',
-            'status': 'Active',
-            'distribution_pattern': 'Nationwide',
-            'product_quantity': '15,000 units',
-            'source': 'CPSC'
-        },
-        {
-            'id': 'CPSC-2025-002',
-            'recall_number': 'CPSC-2025-002',
-            'product_description': 'Glass Food Storage Containers',
-            'reason_for_recall': 'Glass can shatter unexpectedly, posing injury risk',
-            'company': 'SafeStore Corp',
-            'date': '20250518',
-            'classification': 'Consumer Product',
-            'status': 'Active',
-            'distribution_pattern': 'Nationwide',
-            'product_quantity': '8,000 sets',
-            'source': 'CPSC'
-        }
-    ]
-
+  
 def generate_stats(fda_recalls: List[Dict], cpsc_recalls: List[Dict]) -> Dict:
     """Generate statistics from recalls data"""
     all_recalls = fda_recalls + cpsc_recalls
