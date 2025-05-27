@@ -557,4 +557,4 @@ if __name__ == '__main__':
     print(f"Environment: {os.environ.get('FLASK_ENV', 'development')}")
     print(f"Debug mode: {debug}")
     
-    app.run(host='0.0.0.0', port=port, debug=debug)S
+    app.run(host='0.0.0.0', port=port, debug=debug)
