@@ -49,7 +49,7 @@ def set_cache_data(cache_key: str, data):
         'timestamp': time.time()
     }
 
-def fetch_fda_recalls(limit: int = 100) -> List[Dict]:
+def fetch_fda_recalls(limit: int = 1000) -> List[Dict]:
     """Fetch food recalls from FDA API"""
     try:
         # Check cache first
@@ -97,7 +97,7 @@ def fetch_fda_recalls(limit: int = 100) -> List[Dict]:
         print(f"Unexpected error fetching FDA data: {e}")
         return []
 
-def fetch_cpsc_recalls(limit: int = 50) -> List[Dict]:
+def fetch_cpsc_recalls(limit: int = 1000) -> List[Dict]:
     """Fetch CPSC consumer product recalls with improved error handling"""
     try:
         # Check cache first
@@ -169,8 +169,6 @@ def fetch_cpsc_recalls(limit: int = 50) -> List[Dict]:
         empty_data = []
         set_cache_data('cpsc_recalls', empty_data)
         return empty_data
-
-
 
 def normalize_cpsc_recalls(raw_recalls: List[Dict]) -> List[Dict]:
     """Normalize CPSC API response to standard format using RecallDelimited fields"""
@@ -334,9 +332,11 @@ def health_check():
 @app.route('/api/recalls')
 def get_recalls():
     """Get food recalls with optional filtering"""
+  
+   
     try:
         # Get query parameters
-        limit = min(int(request.args.get('limit', 50)), 1000)
+        limit = min(int(request.args.get('limit',  10000)), 10000)
         search = request.args.get('search', '').lower()
         classification = request.args.get('classification', '')
         source = request.args.get('source', '')  # 'fda' or 'cpsc'
