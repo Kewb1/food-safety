@@ -75,7 +75,7 @@ def fetch_fda_recalls(limit: int = 1000) -> List[Dict]:
                 'product_description': recall.get('product_description', 'N/A'),
                 'reason_for_recall': recall.get('reason_for_recall', 'N/A'),
                 'company': recall.get('recalling_firm', 'N/A'),
-                'date': recall.get('report_date', 'N/A'),
+                'date': recall.get('date', 'N/A'),
                 'classification': recall.get('classification', 'N/A'),
                 'status': recall.get('status', 'N/A'),
                 'distribution_pattern': recall.get('distribution_pattern', 'N/A'),
@@ -228,13 +228,13 @@ def normalize_cpsc_recalls(raw_recalls: List[Dict]) -> List[Dict]:
                 company = 'Unknown Manufacturer'
             
             # Date formatting
-            recall_date = recall.get('RecallDate', '20240101')
-            if 'T' in str(recall_date):
+            date = recall.get('RecallDate', '20240101')
+            if 'T' in str(date):
                 try:
-                    dt = datetime.fromisoformat(recall_date.replace('T', ' ').replace('Z', ''))
-                    recall_date = dt.strftime('%Y%m%d')
+                    dt = datetime.fromisoformat(date.replace('T', ' ').replace('Z', ''))
+                    date = dt.strftime('%Y%m%d')
                 except:
-                    recall_date = '20240101'
+                    date = '20240101'
             
             # Product quantity
             number_of_units = recall.get('NumberOfUnits', 'See CPSC for details')
@@ -245,7 +245,7 @@ def normalize_cpsc_recalls(raw_recalls: List[Dict]) -> List[Dict]:
                 'product_description': product_description,
                 'reason_for_recall': reason_for_recall,
                 'company': company,
-                'date': recall_date,
+                'date': date,
                 'classification': 'Consumer Product',
                 'status': 'Active',
                 'distribution_pattern': 'See CPSC for details',
@@ -300,8 +300,8 @@ def generate_stats(fda_recalls: List[Dict], cpsc_recalls: List[Dict]) -> Dict:
             recall_date_str = recall.get('date', '')
             if recall_date_str and recall_date_str != 'N/A':
                 if len(recall_date_str) == 8:  # YYYYMMDD format
-                    recall_date = datetime.strptime(recall_date_str, '%Y%m%d')
-                    if recall_date >= thirty_days_ago:
+                    date = datetime.strptime(recall_date_str, '%Y%m%d')
+                    if date >= thirty_days_ago:
                         recent_count += 1
         except (ValueError, TypeError):
             continue
