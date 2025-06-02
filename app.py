@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import time
+import urllib.parse
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -49,22 +50,57 @@ def set_cache_data(cache_key: str, data):
         'timestamp': time.time()
     }
 
-def fetch_fda_recalls(limit: int = 1000) -> List[Dict]:
-    """Fetch food recalls from FDA API"""
+def fetch_fda_recalls_with_search(search_query: str = None) -> List[Dict]:
+    """Fetch food recalls from FDA API with optional search query"""
     try:
-        # Check cache first
-        cached_data = get_cached_data('fda_recalls')
-        if cached_data:
-            return cached_data[:limit]
-        
         print(f"Fetching FDA recalls from: {Config.FDA_API_BASE}")
-        params = {'limit': min(limit, 1000)}  # FDA API limit
+        params = {'limit': 1000}  # Get maximum available from API
+        
+        # Add search query to FDA API if provided
+        if search_query:
+            # FDA API uses simple search - just the term without field specification
+            params['search'] = search_query
+            print(f"FDA search query: {params['search']}")
         
         response = requests.get(Config.FDA_API_BASE, params=params, timeout=30)
+        
+        # If search fails with specific term, try broader approaches
+        if response.status_code != 200 and search_query:
+            print(f"FDA search failed (status {response.status_code}), trying fallback approaches...")
+            
+            # Try without search parameter - get all data and filter locally
+            params_fallback = {'limit': 1000}
+            response = requests.get(Config.FDA_API_BASE, params=params_fallback, timeout=30)
+            
+            if response.status_code == 200:
+                print("FDA API accessible, will filter results locally")
+            else:
+                print(f"FDA API completely inaccessible: {response.status_code}")
+                return []
+        
         response.raise_for_status()
         
         data = response.json()
         recalls = data.get('results', [])
+        
+        # If we fell back to getting all data, filter locally
+        if search_query and (response.url.find('search=') == -1 or len(recalls) == 0):
+            print(f"Filtering {len(recalls)} FDA recalls locally for: {search_query}")
+            filtered_recalls = []
+            search_lower = search_query.lower()
+            for recall in recalls:
+                # Search in key fields
+                searchable_text = ' '.join([
+                    recall.get('product_description', ''),
+                    recall.get('reason_for_recall', ''),
+                    recall.get('recalling_firm', '')
+                ]).lower()
+                
+                if search_lower in searchable_text:
+                    filtered_recalls.append(recall)
+            
+            recalls = filtered_recalls
+            print(f"Local filtering found {len(recalls)} matching FDA recalls")
         
         # Process and clean the data
         processed_recalls = []
@@ -75,7 +111,7 @@ def fetch_fda_recalls(limit: int = 1000) -> List[Dict]:
                 'product_description': recall.get('product_description', 'N/A'),
                 'reason_for_recall': recall.get('reason_for_recall', 'N/A'),
                 'company': recall.get('recalling_firm', 'N/A'),
-                'date': recall.get('date', 'N/A'),
+                'date': recall.get('recall_initiation_date', 'N/A'),
                 'classification': recall.get('classification', 'N/A'),
                 'status': recall.get('status', 'N/A'),
                 'distribution_pattern': recall.get('distribution_pattern', 'N/A'),
@@ -84,11 +120,8 @@ def fetch_fda_recalls(limit: int = 1000) -> List[Dict]:
             }
             processed_recalls.append(processed_recall)
         
-        # Cache the processed data
-        set_cache_data('fda_recalls', processed_recalls)
-        print(f"Retrieved and cached {len(processed_recalls)} FDA recalls")
-        
-        return processed_recalls[:limit]
+        print(f"Retrieved {len(processed_recalls)} FDA recalls")
+        return processed_recalls
         
     except requests.RequestException as e:
         print(f"Error fetching FDA data: {e}")
@@ -97,14 +130,30 @@ def fetch_fda_recalls(limit: int = 1000) -> List[Dict]:
         print(f"Unexpected error fetching FDA data: {e}")
         return []
 
-def fetch_cpsc_recalls(limit: int = 1000) -> List[Dict]:
-    """Fetch CPSC consumer product recalls with improved error handling"""
+def fetch_fda_recalls() -> List[Dict]:
+    """Fetch ALL food recalls from FDA API (for caching)"""
     try:
         # Check cache first
-        cached_data = get_cached_data('cpsc_recalls')
+        cached_data = get_cached_data('fda_recalls')
         if cached_data:
-            return cached_data[:limit]
+            return cached_data
         
+        # Fetch without search query for caching
+        recalls = fetch_fda_recalls_with_search()
+        
+        # Cache the full processed data
+        set_cache_data('fda_recalls', recalls)
+        print(f"Retrieved and cached {len(recalls)} FDA recalls")
+        
+        return recalls
+        
+    except Exception as e:
+        print(f"Unexpected error in fetch_fda_recalls: {e}")
+        return []
+
+def fetch_cpsc_recalls_with_search(search_query: str = None) -> List[Dict]:
+    """Fetch CPSC consumer product recalls with optional search"""
+    try:
         print(f"Fetching CPSC recalls from: {Config.CPSC_API_BASE}")
         
         headers = {
@@ -112,14 +161,17 @@ def fetch_cpsc_recalls(limit: int = 1000) -> List[Dict]:
             'User-Agent': 'FoodSafetyMonitor/1.0 (Contact: your-email@domain.com)'
         }
         
-        # Updated parameters for CPSC API - use RecallDelimited endpoint
         params = {
-            'format': 'json',  # Required for JSON response
-            # Get recent recalls from the last year to avoid large responses
-            'RecallDateStart': '2024-01-01'
+            'format': 'json',
+            'RecallDateStart': '2024-01-01'  # Get dataset from 2024
         }
         
-        # Use RecallDelimited endpoint for better data structure
+        # Add search parameters to CPSC API if provided
+        if search_query:
+            # CPSC API supports multiple search fields - try ProductName first
+            params['ProductName'] = search_query
+            print(f"CPSC search query: ProductName={search_query}")
+        
         recall_delimited_url = Config.CPSC_API_BASE.replace('/Recall', '/RecallDelimited')
         
         try:
@@ -127,20 +179,62 @@ def fetch_cpsc_recalls(limit: int = 1000) -> List[Dict]:
                 recall_delimited_url, 
                 headers=headers, 
                 params=params,
-                timeout=45  # Increased timeout
+                timeout=45
             )
             
             print(f"CPSC API Response Status: {response.status_code}")
             
+            # If ProductName search returns no results, try without search to get all data
             if response.status_code == 200:
                 try:
                     data = response.json()
                     print(f"CPSC API returned {len(data) if isinstance(data, list) else 'unknown'} records")
                     
+                    # If we got no results with search, try getting all data and filter locally
+                    if search_query and (not isinstance(data, list) or len(data) == 0):
+                        print("CPSC search returned no results, trying to get all data and filter locally...")
+                        params_no_search = {
+                            'format': 'json',
+                            'RecallDateStart': '2024-01-01'
+                        }
+                        
+                        response_all = requests.get(
+                            recall_delimited_url,
+                            headers=headers,
+                            params=params_no_search,
+                            timeout=45
+                        )
+                        
+                        if response_all.status_code == 200:
+                            all_data = response_all.json()
+                            if isinstance(all_data, list) and len(all_data) > 0:
+                                print(f"Got {len(all_data)} total CPSC records, filtering locally...")
+                                
+                                # Filter locally
+                                search_lower = search_query.lower()
+                                filtered_data = []
+                                
+                                for recall in all_data:
+                                    # Search in multiple fields
+                                    searchable_text = ' '.join([
+                                        recall.get('ProductNames', ''),
+                                        recall.get('ProductDescriptions', ''),
+                                        recall.get('Title', ''),
+                                        recall.get('Manufacturers', ''),
+                                        recall.get('Hazards', '')
+                                    ]).lower()
+                                    
+                                    if search_lower in searchable_text:
+                                        filtered_data.append(recall)
+                                
+                                data = filtered_data
+                                print(f"Local filtering found {len(data)} matching CPSC recalls")
+                    
                     if isinstance(data, list) and len(data) > 0:
-                        normalized_recalls = normalize_cpsc_recalls(data[:limit])
-                        set_cache_data('cpsc_recalls', normalized_recalls)
-                        print(f"Retrieved and cached {len(normalized_recalls)} CPSC recalls")
+                        # Normalize the data
+                        normalized_recalls = normalize_cpsc_recalls(data)
+                        print(f"Retrieved {len(normalized_recalls)} CPSC recalls")
+                        
                         return normalized_recalls
                     else:
                         print("CPSC API returned empty or invalid data")
@@ -158,11 +252,28 @@ def fetch_cpsc_recalls(limit: int = 1000) -> List[Dict]:
         except requests.RequestException as e:
             print(f"CPSC API request error: {e}")
         
-        # If CPSC API fails, return empty list
-        print("CPSC API failed - returning empty list")
-        empty_data = []
-        set_cache_data('cpsc_recalls', empty_data)
-        return empty_data
+        return []
+        
+    except Exception as e:
+        print(f"Unexpected error in fetch_cpsc_recalls_with_search: {e}")
+        return []
+
+def fetch_cpsc_recalls() -> List[Dict]:
+    """Fetch ALL CPSC consumer product recalls (for caching)"""
+    try:
+        # Check cache first
+        cached_data = get_cached_data('cpsc_recalls')
+        if cached_data:
+            return cached_data
+        
+        # Fetch without search query for caching
+        recalls = fetch_cpsc_recalls_with_search()
+        
+        # Cache the full normalized data
+        set_cache_data('cpsc_recalls', recalls)
+        print(f"Retrieved and cached {len(recalls)} CPSC recalls")
+        
+        return recalls
         
     except Exception as e:
         print(f"Unexpected error in fetch_cpsc_recalls: {e}")
@@ -332,54 +443,44 @@ def health_check():
 @app.route('/api/recalls')
 def get_recalls():
     """Get food recalls with optional filtering"""
-  
-   
     try:
-        # Get query parameters
-        limit = min(int(request.args.get('limit',  10000)), 10000)
-        search = request.args.get('search', '').lower()
+        # Get query parameters for filtering
+        search = request.args.get('search', '').strip()
         classification = request.args.get('classification', '')
-        source = request.args.get('source', '')  # 'fda' or 'cpsc'
+        source = request.args.get('source', '')
         
         all_recalls = []
+        fda_recalls = []
+        cpsc_recalls = []
         
-        # Handle different source filtering scenarios
-        if source and source.lower() == 'fda':
-            # Only FDA recalls requested
-            fda_recalls = fetch_fda_recalls(limit)
-            all_recalls.extend(fda_recalls)
-            cpsc_recalls = []  # Empty for source counting
-            
-        elif source and source.lower() == 'cpsc':
-            # Only CPSC recalls requested
-            cpsc_recalls = fetch_cpsc_recalls(limit)
-            all_recalls.extend(cpsc_recalls)
-            fda_recalls = []  # Empty for source counting
-            
-        else:
-            # Both sources requested - split the limit between them
-            half_limit = max(1, limit // 2)  # At least 1 for each source
-            fda_recalls = fetch_fda_recalls(half_limit)
-            cpsc_recalls = fetch_cpsc_recalls(half_limit)
-            
-            # Add both to the combined list
-            all_recalls.extend(fda_recalls)
-            all_recalls.extend(cpsc_recalls)
-        
-        print(f"DEBUG: FDA recalls fetched: {len(fda_recalls) if 'fda_recalls' in locals() else 0}")
-        print(f"DEBUG: CPSC recalls fetched: {len(cpsc_recalls) if 'cpsc_recalls' in locals() else 0}")
-        print(f"DEBUG: Total recalls before filtering: {len(all_recalls)}")
-        
-        # Apply filters
-        filtered_recalls = all_recalls
-        
+        # If there's a search query, search the APIs directly
         if search:
-            filtered_recalls = [
-                recall for recall in filtered_recalls
-                if search in recall.get('product_description', '').lower() or
-                   search in recall.get('reason_for_recall', '').lower() or
-                   search in recall.get('company', '').lower()
-            ]
+            print(f"Performing API search for: '{search}'")
+            
+            # Search both APIs directly if no source specified
+            if not source or source.lower() == 'fda':
+                fda_recalls = fetch_fda_recalls_with_search(search)
+                all_recalls.extend(fda_recalls)
+                
+            if not source or source.lower() == 'cpsc':
+                cpsc_recalls = fetch_cpsc_recalls_with_search(search)
+                all_recalls.extend(cpsc_recalls)
+        else:
+            # No search query - get cached data or fetch all
+            if not source or source.lower() == 'fda':
+                fda_recalls = fetch_fda_recalls()
+                all_recalls.extend(fda_recalls)
+                
+            if not source or source.lower() == 'cpsc':
+                cpsc_recalls = fetch_cpsc_recalls()
+                all_recalls.extend(cpsc_recalls)
+        
+        print(f"DEBUG: FDA recalls fetched: {len(fda_recalls)}")
+        print(f"DEBUG: CPSC recalls fetched: {len(cpsc_recalls)}")
+        print(f"DEBUG: Total recalls before additional filtering: {len(all_recalls)}")
+        
+        # Apply additional filters (classification, source) to results
+        filtered_recalls = all_recalls
         
         if classification:
             filtered_recalls = [
@@ -387,37 +488,32 @@ def get_recalls():
                 if recall.get('classification', '').lower() == classification.lower()
             ]
         
-        # Apply final limit only if we have too many results after filtering
-        if len(filtered_recalls) > limit:
-            filtered_recalls = filtered_recalls[:limit]
+        # Apply source filter if specified (this is redundant with the above logic but kept for safety)
+        if source:
+            filtered_recalls = [
+                recall for recall in filtered_recalls
+                if recall.get('source', '').lower() == source.lower()
+            ]
         
         print(f"DEBUG: Final filtered recalls: {len(filtered_recalls)}")
-        if filtered_recalls:
-            sources_in_result = [r.get('source') for r in filtered_recalls]
-            source_counts = {source: sources_in_result.count(source) for source in set(sources_in_result)}
-            print(f"DEBUG: Sources in final result: {source_counts}")
         
         return jsonify({
             'success': True,
             'data': filtered_recalls,
             'count': len(filtered_recalls),
+            'total_available': len(filtered_recalls),
+            'search_performed': bool(search),
             'filters': {
                 'search': search,
                 'classification': classification,
-                'source': source,
-                'limit': limit
+                'source': source
             },
             'sources': {
-                'fda_count': len(fda_recalls) if 'fda_recalls' in locals() else 0,
-                'cpsc_count': len(cpsc_recalls) if 'cpsc_recalls' in locals() else 0
+                'fda_count': len(fda_recalls),
+                'cpsc_count': len(cpsc_recalls)
             }
         })
         
-    except ValueError as e:
-        return jsonify({
-            'success': False,
-            'error': f'Invalid parameter: {str(e)}'
-        }), 400
     except Exception as e:
         print(f"Error in get_recalls: {e}")
         return jsonify({
@@ -438,9 +534,9 @@ def get_stats():
                 'cached': True
             })
         
-        # Fetch fresh data
-        fda_recalls = fetch_fda_recalls(500)
-        cpsc_recalls = fetch_cpsc_recalls(200)
+        # Fetch fresh data (all of it)
+        fda_recalls = fetch_fda_recalls()
+        cpsc_recalls = fetch_cpsc_recalls()
         stats = generate_stats(fda_recalls, cpsc_recalls)
         
         # Cache the stats
@@ -461,7 +557,7 @@ def get_stats():
 
 @app.route('/api/search')
 def search_recalls():
-    """Search recalls by keyword"""
+    """Search recalls by keyword using external APIs"""
     try:
         query = request.args.get('q', '').strip()
         if not query:
@@ -470,43 +566,35 @@ def search_recalls():
                 'error': 'Search query is required'
             }), 400
         
-        limit = min(int(request.args.get('limit', 20)), 100)
+        source = request.args.get('source', '')
         
-        # Fetch recalls from both sources
-        fda_recalls = fetch_fda_recalls(300)
-        cpsc_recalls = fetch_cpsc_recalls(200)
-        all_recalls = fda_recalls + cpsc_recalls
+        print(f"Performing direct API search for: '{query}'")
         
-        query_lower = query.lower()
-        matching_recalls = []
+        all_recalls = []
+        fda_recalls = []
+        cpsc_recalls = []
         
-        for recall in all_recalls:
-            # Search in multiple fields
-            searchable_text = ' '.join([
-                recall.get('product_description', ''),
-                recall.get('reason_for_recall', ''),
-                recall.get('company', ''),
-                recall.get('classification', '')
-            ]).lower()
+        # Search both APIs directly with the query
+        if not source or source.lower() == 'fda':
+            fda_recalls = fetch_fda_recalls_with_search(query)
+            all_recalls.extend(fda_recalls)
             
-            if query_lower in searchable_text:
-                matching_recalls.append(recall)
-                
-            if len(matching_recalls) >= limit:
-                break
+        if not source or source.lower() == 'cpsc':
+            cpsc_recalls = fetch_cpsc_recalls_with_search(query)
+            all_recalls.extend(cpsc_recalls)
         
         return jsonify({
             'success': True,
-            'data': matching_recalls,
-            'count': len(matching_recalls),
-            'query': query
+            'data': all_recalls,
+            'count': len(all_recalls),
+            'query': query,
+            'api_search': True,
+            'sources': {
+                'fda_count': len(fda_recalls),
+                'cpsc_count': len(cpsc_recalls)
+            }
         })
         
-    except ValueError as e:
-        return jsonify({
-            'success': False,
-            'error': f'Invalid parameter: {str(e)}'
-        }), 400
     except Exception as e:
         print(f"Error in search_recalls: {e}")
         return jsonify({
@@ -568,8 +656,8 @@ def update_data():
         cache.clear()
         
         # Fetch fresh data (this will populate cache)
-        fda_recalls = fetch_fda_recalls(100)
-        cpsc_recalls = fetch_cpsc_recalls(50)
+        fda_recalls = fetch_fda_recalls()
+        cpsc_recalls = fetch_cpsc_recalls()
         
         return jsonify({
             'success': True,
